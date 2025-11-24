@@ -3,39 +3,58 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
+/**
+ * Testa se uma porta está disponível
+ */
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
-    const server = net.createServer();
-    server.listen(port, () => {
-      server.close(() => resolve(true));
+    const tester = net.createServer();
+
+    tester.once("error", () => {
+      resolve(false);
     });
-    server.on("error", () => resolve(false));
+
+    tester.once("listening", () => {
+      tester.close(() => resolve(true));
+    });
+
+    tester.listen(port);
   });
 }
 
-async function findAvailablePort(startPort: number = 3000): Promise<number> {
-  for (let port = startPort; port < startPort + 20; port++) {
-    if (await isPortAvailable(port)) {
-      return port;
+/**
+ * Encontra a primeira porta livre a partir de uma porta inicial
+ */
+async function findAvailablePort(start: number = 3000): Promise<number> {
+  for (let p = start; p < start + 50; p++) {
+    if (await isPortAvailable(p)) {
+      return p;
     }
   }
-  throw new Error(`No available port found starting from ${startPort}`);
+  throw new Error(`Nenhuma porta disponível encontrada a partir de ${start}`);
 }
 
+/**
+ * Inicialização do servidor Express
+ */
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
+
+  // Body parsers adequados para uploads grandes
   app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  // OAuth callback under /api/oauth/callback
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Rotas OAuth
   registerOAuthRoutes(app);
-  // tRPC API
+
+  // Rotas tRPC
   app.use(
     "/api/trpc",
     createExpressMiddleware({
@@ -43,23 +62,28 @@ async function startServer() {
       createContext,
     })
   );
-  // development mode uses Vite, production mode uses static files
+
+  // Modo desenvolvimento usa Vite
   if (process.env.NODE_ENV === "development") {
+    console.log("🔧 Iniciando em modo DEV (com Vite HMR)...");
     await setupVite(app, server);
   } else {
+    console.log("🚀 Iniciando em modo PRODUÇÃO (servindo build estático)...");
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
+  const preferredPort = parseInt(process.env.PORT || "3000", 10);
   const port = await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    console.log(`⚠️ Porta ${preferredPort} ocupada. Usando porta alternativa ${port}.`);
   }
 
   server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+    console.log(`\n🌐 Servidor rodando em: http://localhost:${port}\n`);
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(err => {
+  console.error("Erro ao iniciar o servidor:", err);
+});
